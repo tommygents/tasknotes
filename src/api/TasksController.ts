@@ -193,12 +193,36 @@ export class TasksController extends BaseController {
 				return;
 			}
 
-			const updates = await this.parseRequestBody(req);
+			const rawUpdates = await this.parseRequestBody(req);
 
 			const originalTask = await this.cacheManager.getTaskInfo(taskId);
 			if (!originalTask) {
 				this.sendResponse(res, 404, this.errorResponse("Task not found"));
 				return;
+			}
+
+			// Wrap user-defined fields into customFrontmatter so updateTask()
+			// persists them. Without this, mapToFrontmatter() only handles
+			// built-in fields and silently drops user-defined properties.
+			const updates: any = { ...rawUpdates };
+			const userFieldKeys = new Set(
+				(this.plugin.settings.userFields || []).map((f: { key: string }) => f.key)
+			);
+			if (userFieldKeys.size > 0) {
+				const customFrontmatter: Record<string, any> = {
+					...(updates.customFrontmatter || {}),
+				};
+				let hasCustomFields = false;
+				for (const key of Object.keys(updates)) {
+					if (key !== "customFrontmatter" && userFieldKeys.has(key)) {
+						customFrontmatter[key] = updates[key];
+						delete updates[key];
+						hasCustomFields = true;
+					}
+				}
+				if (hasCustomFields || Object.keys(customFrontmatter).length > 0) {
+					updates.customFrontmatter = customFrontmatter;
+				}
 			}
 
 			const updatedTask = await this.taskService.updateTask(originalTask, updates);
