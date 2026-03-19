@@ -126,8 +126,28 @@ export class KanbanView extends BasesViewBase {
 			this.consolidateStatusIcon = consolidateValue === true; // Default to false if not set
 
 			// Read column orders
-			const columnOrderStr = (this.config.get("columnOrder") as string) || "{}";
-			this.columnOrders = JSON.parse(columnOrderStr);
+			const columnOrderRaw = this.config.get("columnOrder");
+			if (typeof columnOrderRaw === "string") {
+				try {
+					this.columnOrders = JSON.parse(columnOrderRaw);
+				} catch {
+					this.columnOrders = {};
+				}
+			} else if (Array.isArray(columnOrderRaw)) {
+				// Bases YAML allows columnOrder as a plain array (shorthand when only one
+				// groupBy exists). saveColumnOrder always writes JSON strings, so this path
+				// only fires for hand-authored base files.
+				const gId = this.getGroupByPropertyId();
+				if (gId) {
+					this.columnOrders = { [gId]: columnOrderRaw };
+				} else {
+					this.columnOrders = {};
+				}
+			} else if (columnOrderRaw && typeof columnOrderRaw === "object") {
+				this.columnOrders = columnOrderRaw as Record<string, string[]>;
+			} else {
+				this.columnOrders = {};
+			}
 
 			// Read enableSearch toggle (default: false for backward compatibility)
 			const enableSearchValue = this.config.get("enableSearch");
@@ -427,6 +447,10 @@ export class KanbanView extends BasesViewBase {
 		// Augment with empty priority columns if grouping by priority
 		this.augmentWithEmptyPriorityColumns(groups, groupByPropertyId);
 
+		// Augment with empty columns from saved column order (general-purpose fallback
+		// that handles custom user fields where no field-specific augmentation exists)
+		this.augmentWithEmptyColumnsFromColumnOrder(groups, groupByPropertyId);
+
 		return groups;
 	}
 
@@ -566,6 +590,31 @@ export class KanbanView extends BasesViewBase {
 			if (!groups.has(priorityValue)) {
 				// This priority has no tasks - add an empty group
 				groups.set(priorityValue, []);
+			}
+		}
+	}
+
+	/**
+	 * Augment groups with empty columns for all values defined in the saved column order.
+	 * This is a general-purpose fallback that handles custom user fields (e.g. gtdStatus)
+	 * where no field-specific augmentation method exists. The column order already records
+	 * every value the user expects to see, so we use it as the source of truth for which
+	 * empty columns to create.
+	 */
+	private augmentWithEmptyColumnsFromColumnOrder(
+		groups: Map<string, TaskInfo[]>,
+		groupByPropertyId: string
+	): void {
+		// Use the same key format as applyColumnOrder and saveColumnOrder —
+		// all three receive groupByPropertyId from getGroupByPropertyId()
+		const savedOrder = this.columnOrders[groupByPropertyId];
+		if (!savedOrder || !Array.isArray(savedOrder) || savedOrder.length === 0) {
+			return; // No saved column order for this grouping
+		}
+
+		for (const columnKey of savedOrder) {
+			if (!groups.has(columnKey)) {
+				groups.set(columnKey, []);
 			}
 		}
 	}
