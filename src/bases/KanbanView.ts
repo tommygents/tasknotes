@@ -1877,6 +1877,11 @@ export class KanbanView extends BasesViewBase {
 		// Strip Bases prefix to get the frontmatter key
 		const frontmatterKey = basesPropertyId.replace(/^(note\.|file\.|task\.)/, "");
 
+		// Coerce string values back to their native types when needed.
+		// convertGroupKeyToString() title-cases booleans for display ("True"/"False"),
+		// but frontmatter needs actual boolean values for checkbox properties.
+		const coercedValue = this.coerceValueForProperty(frontmatterKey, value);
+
 		const task = await this.plugin.cacheManager.getTaskInfo(taskPath);
 		const taskProperty = this.plugin.fieldMapper.lookupMappingKey(frontmatterKey);
 
@@ -1886,14 +1891,52 @@ export class KanbanView extends BasesViewBase {
 			await this.plugin.taskService.updateProperty(
 				task,
 				taskProperty as keyof TaskInfo,
-				value
+				coercedValue
 			);
 		} else {
 			// Update the frontmatter directly for custom/unrecognized properties
 			await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-				frontmatter[frontmatterKey] = value;
+				frontmatter[frontmatterKey] = coercedValue;
 			});
 		}
+	}
+
+	/**
+	 * Coerce a string value back to its native type based on Obsidian's property registry.
+	 * Kanban column keys are always strings (from convertGroupKeyToString), but frontmatter
+	 * properties may expect booleans or numbers. Without this, dragging a task to a "True"
+	 * column would write the string "True" instead of the boolean true.
+	 */
+	private coerceValueForProperty(propertyName: string, value: any): any {
+		if (typeof value !== "string") return value;
+
+		// Check Obsidian's property type registry first
+		const metadataTypeManager = (this.plugin.app as any).metadataTypeManager;
+		let propertyType = metadataTypeManager?.properties?.[propertyName.toLowerCase()]?.type;
+
+		// Fall back to TaskNotes user field type definitions
+		if (!propertyType) {
+			const userField = this.plugin.settings?.userFields?.find(
+				(f: any) => f.key === propertyName
+			);
+			if (userField?.type) propertyType = userField.type;
+		}
+
+		if (propertyType === "checkbox" || propertyType === "boolean") {
+			const lower = value.toLowerCase();
+			if (lower === "true") return true;
+			if (lower === "false") return false;
+			if (lower === "none" || lower === "null") return null;
+		}
+
+		if (propertyType === "number") {
+			const num = Number(value);
+			if (!isNaN(num)) return num;
+		}
+
+		if (value === "None") return null;
+
+		return value;
 	}
 
 	protected setupContainer(): void {
